@@ -56,6 +56,8 @@ contract DscEngine is ReentrancyGuard {
     error DscEngine__TransferFailed();
     error DscEngine__BreaksHealthFactor();
     error DscEngine__MintFailed();
+    error DscEngine__HealthFactorOk();
+    error DscEngine__HealthFactorNotImproved();
 
     ///////////////
     // Modifiers //
@@ -86,6 +88,7 @@ contract DscEngine is ReentrancyGuard {
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% over-collateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant LIQUIDATION_BONUS = 10; // this means 10%
 
     DecentralizedStableCoin private immutable i_dsc;
 
@@ -93,6 +96,9 @@ contract DscEngine is ReentrancyGuard {
     // Events //
     ////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
+    event CollateralRedeemed(
+        address indexed redeemedFrom, address indexed redeemedTo, address indexed token, uint256 amount
+    );
 
     ///////////////
     // Functions //
@@ -113,7 +119,21 @@ contract DscEngine is ReentrancyGuard {
     ////////////////////////
     // External Functions //
     ////////////////////////
-    function depositCollateralAndMintDsc() external {}
+
+    /*
+     * @param tokenCollateralAddress The address of the token to deposit as collateral
+     * @param amountCollateral The amount of the collateral to deposit
+     * @param amountDscToMin The amount of decentralized stable coint to mint
+     * @notice this function will depoist your collateral and mint DSC in one transaction
+     */
+    function depositCollateralAndMintDsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountDscToMin
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintDsc(amountDscToMin);
+    }
 
     /*
      * @notice follows CEI pattern (Checks-Effects-Interactions)
@@ -121,7 +141,7 @@ contract DscEngine is ReentrancyGuard {
      * @param amountCollateral The amount of the token to deposit as collateral
      */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -135,7 +155,19 @@ contract DscEngine is ReentrancyGuard {
         }
     }
 
-    function redeemCollateralForDsc() external {}
+    /*
+     * @param tokenCollateralAddress The address of the token to redeem as collateral
+     * @param amountCollateral The amount of the token to redeem as collateral
+     * @param amountDscToBurn The amount of DSC to burn
+     * This function burns DSC and redeems underlying collateral in one transaction
+     */
+
+    function redeemCollateralForDsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountDscToBurn)
+        external
+    {
+        burnDsc(amountDscToBurn);
+        redeemCollateral(tokenCollateralAddress, amountCollateral);
+    }
 
     // Threshold to let's say 150%
     // $100 ETH -> $74 ETH
@@ -143,15 +175,24 @@ contract DscEngine is ReentrancyGuard {
     // UNDERCOLLATERALIZED!!!
 
     // Hey, if someone pays your minted DSC, they can have all your collateral for a discount
-
-    function redeemCollateral() external {}
+    // In order to redeem collateral:
+    // 1. health factor must be over 1 AFTER collateral is pulled out
+    // CEI: check, effect, interaction
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+        public
+        moreThanZero(amountCollateral)
+        nonReentrant
+    {
+        _redeemCollateral(msg.sender, msg.sender, tokenCollateralAddress, amountCollateral);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /*
      * @notice follows CEI pattern (Checks-Effects-Interactions)
      * @param amountDscToMint The amount of decentralized stable coint to mint
      * @notice they must have more collateral value than the minimum threshold
      */
-    function mintDsc(uint256 amountDscToMint) external moreThanZero(amountDscToMint) nonReentrant {
+    function mintDsc(uint256 amountDscToMint) public moreThanZero(amountDscToMint) nonReentrant {
         // Check if the collateral amount > than DSC amount. Which involves checking price feeds and value of collateral
         // mapping(address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
         s_DscMinted[msg.sender] += amountDscToMint;
@@ -159,20 +200,93 @@ contract DscEngine is ReentrancyGuard {
         // If they minted too much DSC revert the transaction
         _revertIfHealthFactorIsBroken(msg.sender);
         bool minted = i_dsc.mint(msg.sender, amountDscToMint);
-        if (!minted)  {
-          revert DscEngine__MintFailed();
+        if (!minted) {
+            revert DscEngine__MintFailed();
         }
     }
 
-    function burnDsc() external {}
+    function burnDsc(uint256 amount) public moreThanZero(amount) {
+        _burnDsc(amount, msg.sender, msg.sender);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
-    function liquidate() external {}
+    // In the event that ETH tanks down from $100 to say $50, the collateral value wouldn't be enough to cover the DSC minted
+    // In that case some position would be undercollateralized
+    // When somone is close to be undercollateralized, we will pay you to liquidate them
+    /*
+      * @param collateral The ERC20 collateral address to liquidate from the user
+      * @param user The user who has broken the health factor. Their _healthFactor should be below MIN_HEALTH_FACTOR
+      * @notice You can partially liquidate a user
+      * @notice You will get a luquidation bonus for taking the user funds
+      * @notice This function working assumes the protocol will be roughlt 200% overcollateralized in order for this to work
+      * @notice A know bug would be if the protocol were 100% or less collateralized, then we wouldn't be able to incentive the liquidators.
+      * For example, if the price of the collateral plummeted before anyone could be liquidated.
+      * 
+      * Follows CEI: Checks, Effects, Interactions
+    */
+    function liquidate(address collateral, address user, uint256 debtToCover)
+        external
+        moreThanZero(debtToCover)
+        nonReentrant
+    {
+        // check health factor of the user
+        uint256 startingUserHealthFactor = _healthFactor(user);
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert DscEngine__HealthFactorOk();
+        }
+        // We want to burn their DSC "debt: and take their collateral
+        // Bad UserL $140 ETH, $100 DSC. 1.4 health factor
+        // debtToCover = $100
+        // $100 of DSC == ??? ETH?
+        uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+        // And give them a 10% bonus
+        // So we are giving the liquidator $110 of WETH for 100 DSC
+        // We should implement a feature to liquidate in the event the protocol is insolvent
+        // And sweep extra amounts into a treasury
+
+        // 0.05 * 0.1 = 0.005 getting 0.055 ETH
+        uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateral = tokenAmountFromDebtCovered + bonusCollateral;
+        _redeemCollateral(user, msg.sender, collateral, totalCollateral);
+        _burnDsc(debtToCover, user, msg.sender);
+
+        uint256 endingUserHealthFactor = _healthFactor(user);
+        if (endingUserHealthFactor <= startingUserHealthFactor) {
+            revert DscEngine__HealthFactorNotImproved();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function getHealthFactor() external view {}
 
     ///////////////////////////////////
-    // Internal & Internal Functions //
+    // Private & Internal Functions //
     ///////////////////////////////////
+
+    /*
+      * @dev Low-level internal function, do not call unless the function calling it is 
+      * checking for health factors being broken
+      */
+    function _burnDsc(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) private {
+        s_DscMinted[onBehalfOf] -= amountDscToBurn;
+        bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
+        if (!success) {
+            revert DscEngine__TransferFailed();
+        }
+        i_dsc.burn(amountDscToBurn);
+    }
+
+    function _redeemCollateral(address from, address to, address tokenCollateralAddress, uint256 amountCollateral)
+        private
+    {
+        s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
+
+        if (!success) {
+            revert DscEngine__TransferFailed();
+        }
+    }
 
     function _getAccountInformation(address user)
         private
@@ -200,7 +314,6 @@ contract DscEngine is ReentrancyGuard {
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert DscEngine__BreaksHealthFactor();
         }
-
     }
 
     ///////////////////////////////////////
@@ -222,5 +335,17 @@ contract DscEngine is ReentrancyGuard {
         // 1 ETH = $1000
         // The returned value from Chainlink will be 1000 * 1e8
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION; // (1000 * 1e8 * (1e10)) * 1000 / 1e18
+    }
+
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        // price of ETH (token)
+        // $/ETH ETH ??
+        // there is $1000DSC
+        // and ETH is equal to $2000USD
+        // $2000 / $1000= 0.5 ETH
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        // $10e18 * 1e18 / ($2000e8 * 1e10) = 0.005
+        return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);
     }
 }
