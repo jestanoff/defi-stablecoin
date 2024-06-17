@@ -26,6 +26,7 @@ import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {console} from "forge-std/console.sol";
 
 pragma solidity 0.8.26;
 
@@ -347,5 +348,9 @@ contract DscEngine is ReentrancyGuard {
         (, int256 price,,,) = priceFeed.latestRoundData();
         // $10e18 * 1e18 / ($2000e8 * 1e10) = 0.005
         return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);
+    }
+
+    function getAccountInformation(address user) external view returns (uint256 totalDscMinted, uint256 collateralValueInUsd) {
+      (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 }
