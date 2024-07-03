@@ -31,10 +31,10 @@ contract HelperConfig is Script {
 
   function getSepoliaEthConfig() public view returns(NetworkConfig memory) {
     return NetworkConfig({
-      wethUsdPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
-      wbtcUsdPriceFeed: 0x5fb1616F78dA7aFC9FF79e0371741a747D2a7F22,
-      weth: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
-      wbtc: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
+      wethUsdPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306, // Wrapped Ether in USD
+      wbtcUsdPriceFeed: 0x5fb1616F78dA7aFC9FF79e0371741a747D2a7F22, // Wrapped Bitcoins in USD
+      weth: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81, // Wrapped Ether
+      wbtc: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063, // Wrapped Bitcoin
       deployerKey: vm.envUint("PRIVATE_KEY")
     });
   }

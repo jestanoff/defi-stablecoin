@@ -80,12 +80,15 @@ contract DscEngine is ReentrancyGuard {
     /////////////////////
     // State variables //
     /////////////////////
+
+    // Stable coin token addresses mapped to price feeds for that stable coin to fiat currency
+    // For example, WETH => ETH/USD, WBTC => BTC/USD
     mapping(address token => address priceFeed) private s_priceFeeds;
     mapping(address user => mapping(address token => uint256 amount)) private s_collateralDeposited;
     mapping(address user => uint256 amountDscMinted) private s_DscMinted;
     address[] private s_collateralTokens;
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
-    uint256 private constant PRECISION = 1e18;
+    uint256 private constant PRECISION = 1e18; // 18 zeroes is the standard for Ethereum
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% over-collateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant MIN_HEALTH_FACTOR = 1e18;
@@ -104,12 +107,16 @@ contract DscEngine is ReentrancyGuard {
     ///////////////
     // Functions //
     ///////////////
+
+    /**
+     * @param tokenAddresses The addresses of the tokens to use as collateral
+     * @param priceFeedAddresses The addresses of the price feeds for the collateral tokens to USD
+     * @param dscAddress The address of the DecentralizedStableCoin contract
+     */
     constructor(address[] memory tokenAddresses, address[] memory priceFeedAddresses, address dscAddress) {
-        // USD Price Feed
         if (tokenAddresses.length != priceFeedAddresses.length) {
             revert DscEngine__TokenAdderssesAndPriceFeedAddressesMustBeSameLength();
         }
-        // For example ETH/USD, BTC/USD, MKR/USD
         for (uint256 i = 0; i < tokenAddresses.length; i += 1) {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
             s_collateralTokens.push(tokenAddresses[i]);
@@ -121,7 +128,7 @@ contract DscEngine is ReentrancyGuard {
     // External Functions //
     ////////////////////////
 
-    /*
+    /**
      * @param tokenCollateralAddress The address of the token to deposit as collateral
      * @param amountCollateral The amount of the collateral to deposit
      * @param amountDscToMin The amount of decentralized stable coint to mint
@@ -136,10 +143,11 @@ contract DscEngine is ReentrancyGuard {
         mintDsc(amountDscToMin);
     }
 
-    /*
-     * @notice follows CEI pattern (Checks-Effects-Interactions)
+    /**
+     * To buy DSC, you must deposit collateral tokens
      * @param tokenCollateralAddress The address of the token to deposit as collateral
      * @param amountCollateral The amount of the token to deposit as collateral
+     * @notice follows CEI pattern (Checks-Effects-Interactions)
      */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
         public
@@ -149,6 +157,8 @@ contract DscEngine is ReentrancyGuard {
     {
         s_collateralDeposited[msg.sender][tokenCollateralAddress] += amountCollateral;
         emit CollateralDeposited(msg.sender, tokenCollateralAddress, amountCollateral);
+        // Should the depositor first approve the amount on the wrapped token before depositing?
+        // Or would the approval be done via his wallet?
         bool success = IERC20(tokenCollateralAddress).transferFrom(msg.sender, address(this), amountCollateral);
 
         if (!success) {
@@ -156,13 +166,12 @@ contract DscEngine is ReentrancyGuard {
         }
     }
 
-    /*
+    /**
      * @param tokenCollateralAddress The address of the token to redeem as collateral
      * @param amountCollateral The amount of the token to redeem as collateral
      * @param amountDscToBurn The amount of DSC to burn
-     * This function burns DSC and redeems underlying collateral in one transaction
+     * @notice This function burns DSC and redeems underlying collateral in one transaction
      */
-
     function redeemCollateralForDsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountDscToBurn)
         external
     {
@@ -179,6 +188,11 @@ contract DscEngine is ReentrancyGuard {
     // In order to redeem collateral:
     // 1. health factor must be over 1 AFTER collateral is pulled out
     // CEI: check, effect, interaction
+    /**
+     * When you decide you want your collateral back, you can withdraw it from the system
+     * @param tokenCollateralAddress The address of the token to redeem as collateral
+     * @param amountCollateral The amount of the token to redeem as collateral
+     */
     function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
         public
         moreThanZero(amountCollateral)
@@ -188,7 +202,7 @@ contract DscEngine is ReentrancyGuard {
         _revertIfHealthFactorIsBroken(msg.sender);
     }
 
-    /*
+    /**
      * @notice follows CEI pattern (Checks-Effects-Interactions)
      * @param amountDscToMint The amount of decentralized stable coint to mint
      * @notice they must have more collateral value than the minimum threshold
@@ -206,6 +220,9 @@ contract DscEngine is ReentrancyGuard {
         }
     }
 
+    /**
+     * @param amount The amount of DSC to burn
+     */
     function burnDsc(uint256 amount) public moreThanZero(amount) {
         _burnDsc(amount, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender);
@@ -214,7 +231,7 @@ contract DscEngine is ReentrancyGuard {
     // In the event that ETH tanks down from $100 to say $50, the collateral value wouldn't be enough to cover the DSC minted
     // In that case some position would be undercollateralized
     // When somone is close to be undercollateralized, we will pay you to liquidate them
-    /*
+    /**
       * @param collateral The ERC20 collateral address to liquidate from the user
       * @param user The user who has broken the health factor. Their _healthFactor should be below MIN_HEALTH_FACTOR
       * @notice You can partially liquidate a user
@@ -264,10 +281,10 @@ contract DscEngine is ReentrancyGuard {
     // Private & Internal Functions //
     ///////////////////////////////////
 
-    /*
-      * @dev Low-level internal function, do not call unless the function calling it is 
-      * checking for health factors being broken
-      */
+    /**
+     * @dev Low-level internal function, do not call unless the function calling it is 
+     * checking for health factors being broken
+     */
     function _burnDsc(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) private {
         s_DscMinted[onBehalfOf] -= amountDscToBurn;
         bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
@@ -289,6 +306,11 @@ contract DscEngine is ReentrancyGuard {
         }
     }
 
+    /**
+     * @param user The user to get the account information for
+     * @return totalDscMinted
+     * @return collateralValueInUsd
+     */
     function _getAccountInformation(address user)
         private
         view
@@ -298,8 +320,10 @@ contract DscEngine is ReentrancyGuard {
         collateralValueInUsd = getAccountCollateralValue(user);
     }
 
-    /* 
-     * Returns how close to liquidation a user is
+    /**
+     * @param user The user to get the health factor for
+     * @return The health factor of the user
+     * @notice Returns how close to liquidation a user is
      * If a user goes below 1, then they are can get liquidated
      */
     function _healthFactor(address user) private view returns (uint256) {
@@ -310,6 +334,9 @@ contract DscEngine is ReentrancyGuard {
         return (collateralAdjustedForThreshold * PRECISION / totalDscMinted);
     }
 
+    /**
+     * @param user The user to check the health factor for
+     */
     function _revertIfHealthFactorIsBroken(address user) internal view {
         uint256 userHealthFactor = _healthFactor(user);
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
@@ -320,6 +347,10 @@ contract DscEngine is ReentrancyGuard {
     ///////////////////////////////////////
     // Public & External View Functions //
     //////////////////////////////////////
+    /**
+     * @param user The user to get the account information for
+     * @return totalCollateralValueInUsd The total value of the collateral in USD
+     */
     function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
         // loop through each collateral token, get the amount they have deposited, and map it to
         // the price, to get the USD value
@@ -330,6 +361,10 @@ contract DscEngine is ReentrancyGuard {
         }
     }
 
+    /**
+     * @param token The token to get the USD value for
+     * @param amount The amount of the token to get the USD value for
+     */
     function getUsdValue(address token, uint256 amount) public view returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
         (, int256 price,,,) = priceFeed.latestRoundData();
@@ -338,6 +373,10 @@ contract DscEngine is ReentrancyGuard {
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION; // (1000 * 1e8 * (1e10)) * 1000 / 1e18
     }
 
+    /**
+     * @param token The token to get the amount of tokens from USD
+     * @param usdAmountInWei The amount of USD to get the token amount for
+     */
     function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
         // price of ETH (token)
         // $/ETH ETH ??
