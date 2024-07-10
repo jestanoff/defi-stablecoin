@@ -17,9 +17,9 @@ contract Handler is Test {
     ERC20Mock public wbtc;
     uint96 public constant MAX_DEPOSIT_SIZE = type(uint96).max;
 
-    constructor(DscEngine _dscEngine, DecentralizedStableCoin _dsc) {
-        dscEngine = _dscEngine;
+    constructor(DecentralizedStableCoin _dsc, DscEngine _dscEngine) {
         dsc = _dsc;
+        dscEngine = _dscEngine;
 
         address[] memory collateralTokens = dscEngine.getCollateralTokens();
         weth = ERC20Mock(collateralTokens[0]);
@@ -36,6 +36,17 @@ contract Handler is Test {
         collateral.approve(address(dscEngine), amountCollateral);
         dscEngine.depositCollateral(address(collateral), amountCollateral);
         vm.stopPrank();
+    }
+
+    function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
+      ERC20Mock collateral = ERC20Mock(_getCollateralFromSeed(collateralSeed));
+      uint256 maxCollateral = dscEngine.getCollateralBalanceOfUser(address(collateral), msg.sender);
+      amountCollateral = bound(amountCollateral, 0, maxCollateral);
+      if (amountCollateral == 0) {
+          return;
+      }
+      vm.prank(msg.sender);
+      dscEngine.redeemCollateral(address(collateral), amountCollateral);
     }
 
     // Helper Functions

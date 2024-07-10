@@ -412,6 +412,14 @@ contract DscEngine is ReentrancyGuard {
       return LIQUIDATION_THRESHOLD;
     }
 
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+      return s_collateralDeposited[user][token];
+    }
+
+    function getDsc() external view returns (address) {
+      return address(i_dsc);
+    }
+
     /**
      * @param token The token to get the amount of tokens from USD
      * @param usdAmountInWei The amount of USD to get the token amount for

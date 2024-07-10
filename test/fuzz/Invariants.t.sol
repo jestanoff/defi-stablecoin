@@ -31,13 +31,11 @@ contract InvariantsTest is StdInvariant, Test {
     deployer = new DeployDsc();
     (dsc, dsce, config) = deployer.run();
     (,, weth, wbtc,) = config.activeNetworkConfig();
-    handler = new Handler(dsce, dsc);
+    handler = new Handler(dsc, dsce);
     targetContract(address(handler));
-    // targetContract(address(dsce));
-    // hey don't call redeemcollateral unless there is collateral to redeem
   }
 
-  function invariant_protocolMustHaveMoreValueThanTotalSupplyUsd() public view {
+  function invariant_protocolMustHaveMoreValueThanTotalSupplyUsd7() public view {
     // get the value of all the collateral in the protocol
     // compare it to all the debt (dsc.)
     uint256 totalSupply = dsc.totalSupply();
