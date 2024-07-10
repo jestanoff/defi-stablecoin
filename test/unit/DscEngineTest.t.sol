@@ -113,5 +113,4 @@ contract DscEngineTest is Test {
     assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
   }
 
-  function test
 }

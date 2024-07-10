@@ -8,3 +8,8 @@
   3.1. wETH
   3.2. wBTC
   
+- Calculate health factor function
+- Set health factor if debt is 0
+- Added a bunch of view function
+
+1. What are our invariants/properties?
