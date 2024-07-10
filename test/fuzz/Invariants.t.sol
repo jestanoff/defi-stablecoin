@@ -35,7 +35,7 @@ contract InvariantsTest is StdInvariant, Test {
     targetContract(address(handler));
   }
 
-  function invariant_protocolMustHaveMoreValueThanTotalSupplyUsd7() public view {
+  function invariant_protocolMustHaveMoreValueThanTotalSupplyUsd9() public view {
     // get the value of all the collateral in the protocol
     // compare it to all the debt (dsc.)
     uint256 totalSupply = dsc.totalSupply();
@@ -45,9 +45,21 @@ contract InvariantsTest is StdInvariant, Test {
     uint256 wethValue = dsce.getUsdValue(weth, totalWethDeposited);
     uint256 wbtcValue = dsce.getUsdValue(wbtc, totalBtcDeposited);
 
+    console.log("timesMintCalled: %s", handler.timesMintCalled());
     console.log("wethValue: %s", wethValue);
     console.log("wbtcValue: %s", wbtcValue);
+    console.log("total supply: %s", wethValue + wbtcValue);
 
     assert(wethValue + wbtcValue >= totalSupply);
+  }
+
+  function invartiant_gettersShouldNotRevert() public view {
+    dsce.getCollateralTokens();
+    dsce.getPrecision();
+    dsce.getDsc();
+    dsce.getLiquidationThreshold();
+    dsce.getMinHealthFactor();
+    dsce.getLiquidationBonus();
+    dsce.getPrecision();
   }
 }
